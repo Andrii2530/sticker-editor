@@ -53,6 +53,7 @@ button{height:42px;border:1px solid #ccd2dc;border-radius:9px;background:#fff;pa
   .text-block.selected{border-color:transparent;background:transparent}
 }
 </style>
+<style id="printPageStyle">@page{margin:0;size:60mm 50mm}</style>
 </head>
 <body>
 <div class="app">
@@ -85,6 +86,15 @@ button{height:42px;border:1px solid #ccd2dc;border-radius:9px;background:#fff;pa
             <option value="60x40">60 × 40 мм</option>
             <option value="50x50">50 × 50 мм</option>
           </select>
+        </div>
+
+        <div class="box">
+          <label>Орієнтація</label>
+          <select id="orientation">
+            <option value="landscape">Горизонтальна</option>
+            <option value="portrait">Вертикальна</option>
+          </select>
+          <div class="tip">Для 60×50 це буде 60×50 мм або 50×60 мм. Для 60×40 — 60×40 мм або 40×60 мм.</div>
         </div>
 
         <div class="box">
@@ -136,7 +146,8 @@ button{height:42px;border:1px solid #ccd2dc;border-radius:9px;background:#fff;pa
         <div class="box">
           <div class="actions">
             <button id="editText">Редагувати текст</button>
-            <button id="print" class="primary">Друк / PDF</button>
+            <button id="downloadPdf" class="primary">Завантажити PDF</button>
+            <button id="print">Друк</button>
             <button id="back">← Назад</button>
           </div>
         </div>
@@ -185,6 +196,8 @@ let fitTimer=null;
 let fitRAF=null;
 const zoom = document.getElementById("zoom");
 const stickerWrap = document.getElementById("stickerWrap");
+const orientation = document.getElementById("orientation");
+const printPageStyle = document.getElementById("printPageStyle");
 
 function selectionInsideEditor(){
   const sel=window.getSelection();
@@ -225,11 +238,23 @@ editorText.addEventListener("input",()=>{ saveSelection(); syncFromEditor(false)
 ["mouseup","keyup","touchend"].forEach(ev=>editorText.addEventListener(ev,saveSelection));
 document.addEventListener("selectionchange",()=>{ if(selectionInsideEditor()) saveSelection(); });
 
+function getPhysicalSize(){
+  const [baseW,baseH]=sizes[sizeEdit.value || sizeStart.value];
+  if(orientation && orientation.value==="portrait" && baseW!==baseH) return [baseH,baseW];
+  return [baseW,baseH];
+}
+
+function updatePrintPageSize(){
+  const [w,h]=getPhysicalSize();
+  printPageStyle.textContent=`@page{margin:0;size:${w}mm ${h}mm}`;
+}
+
 function setStickerSize(v){
-  const [w,h]=sizes[v];
+  sizeEdit.value=v;
+  const [w,h]=getPhysicalSize();
   sticker.style.width=w+"mm";
   sticker.style.height=h+"mm";
-  sizeEdit.value=v;
+  updatePrintPageSize();
   setTimeout(()=>{ fitText(); applyZoom(); },0);
 }
 
@@ -285,6 +310,7 @@ function generate(){
 
 document.getElementById("generate").onclick=generate;
 sizeEdit.onchange=e=>setStickerSize(e.target.value);
+orientation.onchange=()=>setStickerSize(sizeEdit.value);
 
 document.getElementById("editText").onclick=()=>{
   editorText.scrollIntoView({behavior:"smooth",block:"center"});
@@ -359,8 +385,115 @@ document.getElementById("center").onclick=()=>commandWithWholeTextFallback("just
 document.getElementById("right").onclick=()=>commandWithWholeTextFallback("justifyRight");
 document.getElementById("justify").onclick=()=>commandWithWholeTextFallback("justifyFull");
 
+function mmToPt(mm){ return mm*72/25.4; }
+
+function dataUrlToBytes(dataUrl){
+  const b64=dataUrl.split(',')[1];
+  const bin=atob(b64);
+  const out=new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) out[i]=bin.charCodeAt(i);
+  return out;
+}
+
+function concatBytes(parts){
+  const enc=new TextEncoder();
+  const arrays=parts.map(p=>typeof p==='string'?enc.encode(p):p);
+  const len=arrays.reduce((n,a)=>n+a.length,0);
+  const out=new Uint8Array(len);
+  let off=0;
+  for(const a of arrays){out.set(a,off);off+=a.length;}
+  return out;
+}
+
+function makePdfFromJpeg(jpegBytes,pixelW,pixelH,pageWmm,pageHmm){
+  const W=mmToPt(pageWmm).toFixed(4), H=mmToPt(pageHmm).toFixed(4);
+  const objects=[];
+  objects[1]='<< /Type /Catalog /Pages 2 0 R >>';
+  objects[2]='<< /Type /Pages /Kids [3 0 R] /Count 1 >>';
+  objects[3]=`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>`;
+  const stream=`q\n${W} 0 0 ${H} 0 0 cm\n/Im0 Do\nQ\n`;
+  objects[4]=`<< /Length ${stream.length} >>\nstream\n${stream}endstream`;
+  const imgHead=`<< /Type /XObject /Subtype /Image /Width ${pixelW} /Height ${pixelH} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegBytes.length} >>\nstream\n`;
+  const imgTail='\nendstream';
+
+  const chunks=['%PDF-1.4\n%\xE2\xE3\xCF\xD3\n'];
+  const offsets=[0];
+  let byteLen=new TextEncoder().encode(chunks[0]).length;
+  for(let i=1;i<=5;i++){
+    offsets[i]=byteLen;
+    if(i===5){
+      const a=concatBytes([`${i} 0 obj\n`,imgHead,jpegBytes,imgTail,'\nendobj\n']);
+      chunks.push(a); byteLen+=a.length;
+    }else{
+      const txt=`${i} 0 obj\n${objects[i]}\nendobj\n`;
+      chunks.push(txt); byteLen+=new TextEncoder().encode(txt).length;
+    }
+  }
+  const xrefOffset=byteLen;
+  let xref='xref\n0 6\n0000000000 65535 f \n';
+  for(let i=1;i<=5;i++) xref+=String(offsets[i]).padStart(10,'0')+' 00000 n \n';
+  const trailer=`trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+  return concatBytes([...chunks,xref,trailer]);
+}
+
+async function stickerToCanvas(scale=4){
+  const rect=sticker.getBoundingClientRect();
+  const cssW=sticker.offsetWidth, cssH=sticker.offsetHeight;
+  const clone=sticker.cloneNode(true);
+  clone.style.position='relative';
+  clone.style.left='0'; clone.style.top='0';
+  clone.style.transform='none';
+  clone.style.boxShadow='none';
+  clone.style.border='0';
+  clone.style.width=cssW+'px'; clone.style.height=cssH+'px';
+  const tb=clone.querySelector('.text-block');
+  if(tb){ tb.classList.remove('selected'); tb.style.borderColor='transparent'; tb.style.background='transparent'; }
+
+  const serializer=new XMLSerializer();
+  const html=serializer.serializeToString(clone);
+  const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="${cssW*scale}" height="${cssH*scale}" viewBox="0 0 ${cssW} ${cssH}"><foreignObject x="0" y="0" width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml"><style>*{box-sizing:border-box}.sticker{background:#fff;overflow:hidden;font-family:Arial,sans-serif}.text-block{position:absolute;padding:2px;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;line-height:1.08;overflow:hidden;color:#111}</style>${html}</div></foreignObject></svg>`;
+  const blob=new Blob([svg],{type:'image/svg+xml;charset=utf-8'});
+  const url=URL.createObjectURL(blob);
+  try{
+    const img=new Image();
+    await new Promise((resolve,reject)=>{img.onload=resolve;img.onerror=reject;img.src=url;});
+    const canvas=document.createElement('canvas');
+    canvas.width=Math.round(cssW*scale); canvas.height=Math.round(cssH*scale);
+    const ctx=canvas.getContext('2d');
+    ctx.fillStyle='#fff'; ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.drawImage(img,0,0,canvas.width,canvas.height);
+    return canvas;
+  }finally{URL.revokeObjectURL(url);}
+}
+
+async function downloadExactPdf(){
+  const btn=document.getElementById('downloadPdf');
+  const old=btn.textContent;
+  btn.disabled=true; btn.textContent='Готую PDF…';
+  try{
+    block.classList.remove('selected');
+    const [w,h]=getPhysicalSize();
+    const canvas=await stickerToCanvas(4);
+    const jpegBytes=dataUrlToBytes(canvas.toDataURL('image/jpeg',0.98));
+    const pdf=makePdfFromJpeg(jpegBytes,canvas.width,canvas.height,w,h);
+    const blobPdf=new Blob([pdf],{type:'application/pdf'});
+    const url=URL.createObjectURL(blobPdf);
+    const a=document.createElement('a');
+    a.href=url;
+    a.download=`sticker-${w}x${h}mm.pdf`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),1500);
+  }catch(e){
+    console.error(e);
+    alert('Не вдалося створити PDF. Спробуйте ще раз.');
+  }finally{btn.disabled=false;btn.textContent=old;}
+}
+
+document.getElementById('downloadPdf').onclick=downloadExactPdf;
+
 document.getElementById("print").onclick=()=>{
   block.contentEditable="false";
+  updatePrintPageSize();
   window.print();
 };
 
@@ -379,6 +512,11 @@ window.addEventListener("beforeprint",()=>{
   stickerWrap.style.height=sticker.offsetHeight+"px";
 });
 window.addEventListener("afterprint",()=>{ if(savedZoom!==null){ zoom.value=savedZoom; applyZoom(); } });
+
+// Offline mode after the first successful online load.
+if("serviceWorker" in navigator && location.protocol.startsWith("http")){
+  window.addEventListener("load",()=>{ navigator.serviceWorker.register("./sw.js").catch(()=>{}); });
+}
 </script>
 </body>
 </html>
