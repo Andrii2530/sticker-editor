@@ -27,7 +27,7 @@ button{height:42px;border:1px solid #ccd2dc;border-radius:9px;background:#fff;pa
 .preview-column{min-width:0}
 .editor-bottom{margin-top:16px;border:1px solid #d9dee7;border-radius:12px;padding:13px;background:#fff}
 .format-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
-.format-grid button{padding:0 8px;font-size:18px}
+.format-grid button{padding:0 5px;font-size:12px;white-space:nowrap}
 .panel{display:flex;flex-direction:column;gap:14px}
 .box{border:1px solid #d9dee7;border-radius:12px;padding:13px}
 .actions{display:flex;gap:8px;flex-wrap:wrap}
@@ -125,10 +125,10 @@ button{height:42px;border:1px solid #ccd2dc;border-radius:9px;background:#fff;pa
           <label>Формат тексту</label>
           <div class="format-grid">
             <button id="bold" title="Жирний"><b>B</b></button>
-            <button id="left" title="По лівому краю">☰</button>
-            <button id="center" title="По центру">≡</button>
-            <button id="right" title="По правому краю">☷</button>
-            <button id="justify" title="По ширині">☵</button>
+            <button id="left" title="По лівому краю">← Ліво</button>
+            <button id="center" title="По центру">↔ Центр</button>
+            <button id="right" title="По правому краю">Право →</button>
+            <button id="justify" title="По ширині">≡ Ширина</button>
           </div>
           <div class="tip" style="margin-top:9px">Працює як у Word: виділи слово, фразу, рядок або весь текст. <b>B</b> робить жирним саме виділення. Вирівнювання застосовується до рядка/абзацу з виділенням; якщо нічого не виділено — до всього тексту.</div>
         </div>
