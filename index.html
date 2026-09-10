@@ -94,11 +94,11 @@ button{height:42px;border:1px solid #ccd2dc;border-radius:9px;background:#fff;pa
         <div class="box">
           <label>Розмір шрифту</label>
           <div class="row" style="margin-top:0">
-            <input id="fontSize" type="number" min="1" max="120" value="18" style="flex:1">
+            <input id="fontSize" type="number" min="1" max="120" step="0.1" value="18" style="flex:1">
             <button id="minus">−</button>
             <button id="plus">+</button>
           </div>
-          <div class="tip">Мінімум — 1. Ручна зміна вимикає автопідбір.</div>
+          <div class="tip">Мінімум — 1. Можна вводити дробові значення, наприклад 3,2 або 4,5. Кнопки +/− змінюють на 0,1. Ручна зміна вимикає автопідбір.</div>
         </div>
 
         <div class="box">
@@ -263,14 +263,17 @@ autoFit.onchange=()=>{if(autoFit.checked) fitText()};
 
 function manualSize(delta=0){
   autoFit.checked=false;
-  let v=parseInt(fontSize.value)||18;
+  let raw=String(fontSize.value).replace(",", ".");
+  let v=parseFloat(raw);
+  if(!Number.isFinite(v)) v=18;
   v=Math.max(1,Math.min(120,v+delta));
+  v=Math.round(v*10)/10;
   fontSize.value=v;
   block.style.fontSize=v+"px";
 }
 fontSize.onchange=()=>manualSize(0);
-document.getElementById("minus").onclick=()=>manualSize(-1);
-document.getElementById("plus").onclick=()=>manualSize(1);
+document.getElementById("minus").onclick=()=>manualSize(-0.1);
+document.getElementById("plus").onclick=()=>manualSize(0.1);
 
 
 zoom.onchange=applyZoom;
