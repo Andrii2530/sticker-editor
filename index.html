@@ -23,7 +23,11 @@ label{display:block;font-weight:700;font-size:14px;margin-bottom:7px}
 select,input[type=number]{width:100%;height:42px;border:1px solid #ccd2dc;border-radius:9px;padding:0 10px}
 button{height:42px;border:1px solid #ccd2dc;border-radius:9px;background:#fff;padding:0 14px;font-weight:700;cursor:pointer}
 .primary{background:#111827;color:#fff;border-color:#111827}
-.editor{display:grid;grid-template-columns:320px 1fr;gap:18px}
+.editor{display:grid;grid-template-columns:320px 1fr;gap:18px;align-items:start}
+.preview-column{min-width:0}
+.editor-bottom{margin-top:16px;border:1px solid #d9dee7;border-radius:12px;padding:13px;background:#fff}
+.format-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+.format-grid button{padding:0 8px;font-size:18px}
 .panel{display:flex;flex-direction:column;gap:14px}
 .box{border:1px solid #d9dee7;border-radius:12px;padding:13px}
 .actions{display:flex;gap:8px;flex-wrap:wrap}
@@ -40,7 +44,7 @@ button{height:42px;border:1px solid #ccd2dc;border-radius:9px;background:#fff;pa
 @media print{
   @page{margin:0}
   body{background:#fff}
-  .panel,h1,p{display:none!important}
+  .panel,.editor-bottom,h1,p{display:none!important}
   .app,.card{padding:0;margin:0;border:0;box-shadow:none;max-width:none}
   .editor{display:block}
   .preview{padding:0;border:0;background:#fff;min-height:0;display:block;overflow:visible}
@@ -118,18 +122,15 @@ button{height:42px;border:1px solid #ccd2dc;border-radius:9px;background:#fff;pa
         </div>
 
         <div class="box">
-          <label>Текст стікера</label>
-          <div id="editorText" contenteditable="true" data-placeholder="Редагуйте текст тут"></div>
-          <div class="tip">Виділіть мишкою потрібні слова і натисніть <b>B</b> — жирним стане тільки виділена частина. Зміни одразу видно на стікері.</div>
-        </div>
-
-        <div class="box">
-          <label>Стиль</label>
-          <div class="toolbar">
-            <button id="bold"><b>B</b></button>
-            <button id="left">←</button>
-            <button id="center">↔</button>
+          <label>Формат тексту</label>
+          <div class="format-grid">
+            <button id="bold" title="Жирний"><b>B</b></button>
+            <button id="left" title="По лівому краю">☰</button>
+            <button id="center" title="По центру">≡</button>
+            <button id="right" title="По правому краю">☷</button>
+            <button id="justify" title="По ширині">☵</button>
           </div>
+          <div class="tip" style="margin-top:9px">Працює як у Word: виділи слово, фразу, рядок або весь текст. <b>B</b> робить жирним саме виділення. Вирівнювання застосовується до рядка/абзацу з виділенням; якщо нічого не виділено — до всього тексту.</div>
         </div>
 
         <div class="box">
@@ -146,7 +147,7 @@ button{height:42px;border:1px solid #ccd2dc;border-radius:9px;background:#fff;pa
         </div>
       </div>
 
-      <div>
+      <div class="preview-column">
         <div class="preview">
           <div class="preview-stage">
             <div id="stickerWrap" class="sticker-wrap">
@@ -155,6 +156,12 @@ button{height:42px;border:1px solid #ccd2dc;border-radius:9px;background:#fff;pa
               </div>
             </div>
           </div>
+        </div>
+
+        <div class="editor-bottom">
+          <label>Текст стікера — редагування</label>
+          <div id="editorText" contenteditable="true" data-placeholder="Редагуйте текст тут"></div>
+          <div class="tip" style="margin-top:8px">Редактор тепер під стікером. Виділяй будь-яке слово, кілька слів або окремий рядок і застосовуй форматування з панелі зліва.</div>
         </div>
       </div>
     </div>
@@ -173,9 +180,36 @@ const block = document.getElementById("textBlock");
 const autoFit = document.getElementById("autoFit");
 const fontSize = document.getElementById("fontSize");
 const editorText = document.getElementById("editorText");
-let lastRichEditor = editorText;
+let savedRange=null;
 const zoom = document.getElementById("zoom");
 const stickerWrap = document.getElementById("stickerWrap");
+
+function selectionInsideEditor(){
+  const sel=window.getSelection();
+  if(!sel || sel.rangeCount===0) return false;
+  const r=sel.getRangeAt(0);
+  return editorText.contains(r.commonAncestorContainer);
+}
+function saveSelection(){
+  if(selectionInsideEditor()){
+    savedRange=window.getSelection().getRangeAt(0).cloneRange();
+  }
+}
+function restoreSelection(){
+  editorText.focus();
+  const sel=window.getSelection();
+  sel.removeAllRanges();
+  if(savedRange){
+    try{ sel.addRange(savedRange); }catch(e){}
+  }
+}
+function syncFromEditor(){
+  block.innerHTML=editorText.innerHTML;
+  fitText();
+}
+editorText.addEventListener("input",()=>{ saveSelection(); syncFromEditor(); });
+["mouseup","keyup","touchend"].forEach(ev=>editorText.addEventListener(ev,saveSelection));
+document.addEventListener("selectionchange",()=>{ if(selectionInsideEditor()) saveSelection(); });
 
 function setStickerSize(v){
   const [w,h]=sizes[v];
@@ -196,7 +230,6 @@ function applyZoom(){
 
 function fitText(){
   if(!autoFit.checked) return;
-
   const pad=6;
   block.style.left=pad+"px";
   block.style.top=pad+"px";
@@ -207,57 +240,35 @@ function fitText(){
 
   let size=120;
   block.style.fontSize=size+"px";
-
   while(size>1 && (block.scrollHeight>block.clientHeight || block.scrollWidth>block.clientWidth)){
-    size--;
+    size=Math.max(1,Math.round((size-0.1)*10)/10);
     block.style.fontSize=size+"px";
   }
-  fontSize.value=size;
+  fontSize.value=size.toFixed(1).replace(/\.0$/,'');
 }
 
 function generate(){
   const text=source.value.trim();
   if(!text){alert("Введіть текст.");return}
-  block.innerText=source.value;
   editorText.innerText=source.value;
+  block.innerHTML=editorText.innerHTML;
   setStickerSize(sizeStart.value);
   start.classList.add("hidden");
   edit.classList.remove("hidden");
-  setTimeout(fitText,50);
+  setTimeout(()=>{fitText();applyZoom();},50);
 }
 
 document.getElementById("generate").onclick=generate;
 sizeEdit.onchange=e=>setStickerSize(e.target.value);
 
-function syncFromBlock(){
-  editorText.innerHTML=block.innerHTML;
-  fitText();
-}
-function syncFromEditor(){
-  block.innerHTML=editorText.innerHTML;
-  fitText();
-}
-
-block.addEventListener("input",syncFromBlock);
-editorText.addEventListener("input",syncFromEditor);
-
-[editorText,block].forEach(el=>{
-  el.addEventListener("focus",()=>lastRichEditor=el);
-  el.addEventListener("mouseup",()=>lastRichEditor=el);
-  el.addEventListener("keyup",()=>lastRichEditor=el);
-});
-block.addEventListener("dblclick",()=>{
-  block.contentEditable="true";
-  block.focus();
-});
-block.addEventListener("blur",()=>{
-  block.contentEditable="false";
-  fitText();
-});
 document.getElementById("editText").onclick=()=>{
-  block.contentEditable="true";
-  block.focus();
+  editorText.scrollIntoView({behavior:"smooth",block:"center"});
+  editorText.focus();
 };
+block.addEventListener("dblclick",()=>{
+  editorText.scrollIntoView({behavior:"smooth",block:"center"});
+  editorText.focus();
+});
 
 autoFit.onchange=()=>{if(autoFit.checked) fitText()};
 
@@ -275,7 +286,6 @@ fontSize.onchange=()=>manualSize(0);
 document.getElementById("minus").onclick=()=>manualSize(-0.1);
 document.getElementById("plus").onclick=()=>manualSize(0.1);
 
-
 zoom.onchange=applyZoom;
 function stepZoom(delta){
   const values=[1,1.5,2,2.5,3];
@@ -289,21 +299,40 @@ document.getElementById("zoomMinus").onclick=()=>stepZoom(-1);
 document.getElementById("zoomPlus").onclick=()=>stepZoom(1);
 window.addEventListener("resize",applyZoom);
 
-const boldBtn=document.getElementById("bold");
-boldBtn.addEventListener("mousedown",e=>e.preventDefault());
-boldBtn.onclick=()=>{
-  const host=lastRichEditor || editorText;
-  host.focus();
-  document.execCommand("bold",false,null);
-  if(host===editorText){
-    block.innerHTML=editorText.innerHTML;
-  }else{
-    editorText.innerHTML=block.innerHTML;
-  }
-  fitText();
-};
-document.getElementById("left").onclick=()=>block.style.textAlign="left";
-document.getElementById("center").onclick=()=>block.style.textAlign="center";
+function toolbarCommand(cmd,value=null){
+  restoreSelection();
+  document.execCommand(cmd,false,value);
+  saveSelection();
+  syncFromEditor();
+}
+
+["bold","left","center","right","justify"].forEach(id=>{
+  document.getElementById(id).addEventListener("mousedown",e=>e.preventDefault());
+});
+
+function selectAllEditor(){
+  const r=document.createRange();
+  r.selectNodeContents(editorText);
+  const sel=window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(r);
+  savedRange=r.cloneRange();
+}
+
+function commandWithWholeTextFallback(cmd){
+  restoreSelection();
+  const sel=window.getSelection();
+  if(!sel || sel.rangeCount===0 || sel.isCollapsed) selectAllEditor();
+  document.execCommand(cmd,false,null);
+  saveSelection();
+  syncFromEditor();
+}
+
+document.getElementById("bold").onclick=()=>commandWithWholeTextFallback("bold");
+document.getElementById("left").onclick=()=>commandWithWholeTextFallback("justifyLeft");
+document.getElementById("center").onclick=()=>commandWithWholeTextFallback("justifyCenter");
+document.getElementById("right").onclick=()=>commandWithWholeTextFallback("justifyRight");
+document.getElementById("justify").onclick=()=>commandWithWholeTextFallback("justifyFull");
 
 document.getElementById("print").onclick=()=>{
   block.contentEditable="false";
