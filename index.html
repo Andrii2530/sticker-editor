@@ -406,87 +406,204 @@ function concatBytes(parts){
 }
 
 function makePdfFromJpeg(jpegBytes,pixelW,pixelH,pageWmm,pageHmm){
-  const W=mmToPt(pageWmm).toFixed(4), H=mmToPt(pageHmm).toFixed(4);
-  const objects=[];
-  objects[1]='<< /Type /Catalog /Pages 2 0 R >>';
-  objects[2]='<< /Type /Pages /Kids [3 0 R] /Count 1 >>';
-  objects[3]=`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>`;
-  const stream=`q\n${W} 0 0 ${H} 0 0 cm\n/Im0 Do\nQ\n`;
-  objects[4]=`<< /Length ${stream.length} >>\nstream\n${stream}endstream`;
-  const imgHead=`<< /Type /XObject /Subtype /Image /Width ${pixelW} /Height ${pixelH} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegBytes.length} >>\nstream\n`;
-  const imgTail='\nendstream';
+  const enc=new TextEncoder();
+  const W=mmToPt(pageWmm).toFixed(4);
+  const H=mmToPt(pageHmm).toFixed(4);
+  const content=`q\n${W} 0 0 ${H} 0 0 cm\n/Im0 Do\nQ\n`;
 
-  const chunks=['%PDF-1.4\n%\xE2\xE3\xCF\xD3\n'];
+  const parts=[];
   const offsets=[0];
-  let byteLen=new TextEncoder().encode(chunks[0]).length;
-  for(let i=1;i<=5;i++){
-    offsets[i]=byteLen;
-    if(i===5){
-      const a=concatBytes([`${i} 0 obj\n`,imgHead,jpegBytes,imgTail,'\nendobj\n']);
-      chunks.push(a); byteLen+=a.length;
-    }else{
-      const txt=`${i} 0 obj\n${objects[i]}\nendobj\n`;
-      chunks.push(txt); byteLen+=new TextEncoder().encode(txt).length;
-    }
-  }
-  const xrefOffset=byteLen;
+  let total=0;
+  const push=(part)=>{
+    const bytes=typeof part==='string'?enc.encode(part):part;
+    parts.push(bytes); total+=bytes.length;
+  };
+
+  // ASCII-only header keeps byte offsets deterministic in every browser.
+  push('%PDF-1.4\n%STICKER\n');
+
+  const addObj=(num,bodyParts)=>{
+    offsets[num]=total;
+    push(`${num} 0 obj\n`);
+    for(const x of bodyParts) push(x);
+    push('\nendobj\n');
+  };
+
+  addObj(1,['<< /Type /Catalog /Pages 2 0 R >>']);
+  addObj(2,['<< /Type /Pages /Kids [3 0 R] /Count 1 >>']);
+  addObj(3,[`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] /Resources << /ProcSet [/PDF /ImageC] /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>`]);
+  addObj(4,[`<< /Length ${enc.encode(content).length} >>\nstream\n`,content,'endstream']);
+  addObj(5,[`<< /Type /XObject /Subtype /Image /Width ${pixelW} /Height ${pixelH} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegBytes.length} >>\nstream\n`,jpegBytes,'\nendstream']);
+
+  const xrefOffset=total;
   let xref='xref\n0 6\n0000000000 65535 f \n';
   for(let i=1;i<=5;i++) xref+=String(offsets[i]).padStart(10,'0')+' 00000 n \n';
-  const trailer=`trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
-  return concatBytes([...chunks,xref,trailer]);
+  push(xref);
+  push(`trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`);
+
+  const out=new Uint8Array(total);
+  let pos=0;
+  for(const part of parts){out.set(part,pos);pos+=part.length;}
+  return out;
+}
+
+function nextFrame(){
+  return new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+}
+
+function canvasFontFromStyle(cs){
+  const style=(cs.fontStyle && cs.fontStyle!=='normal')?cs.fontStyle:'normal';
+  const variant=(cs.fontVariant && cs.fontVariant!=='normal')?cs.fontVariant:'normal';
+  const weight=cs.fontWeight || '400';
+  const size=cs.fontSize || '12px';
+  const family=cs.fontFamily || 'Arial, sans-serif';
+  return `${style} ${variant} ${weight} ${size} ${family}`;
 }
 
 async function stickerToCanvas(scale=4){
-  const rect=sticker.getBoundingClientRect();
-  const cssW=sticker.offsetWidth, cssH=sticker.offsetHeight;
+  // Render through the browser's own text layout, then paint the already-laid-out
+  // glyphs to canvas. This avoids SVG/foreignObject security restrictions that
+  // can break direct PDF export on GitHub Pages.
   const clone=sticker.cloneNode(true);
-  clone.style.position='relative';
-  clone.style.left='0'; clone.style.top='0';
+  clone.removeAttribute('id');
+  clone.style.position='fixed';
+  clone.style.left='-10000px';
+  clone.style.top='0';
   clone.style.transform='none';
+  clone.style.transformOrigin='top left';
   clone.style.boxShadow='none';
   clone.style.border='0';
-  clone.style.width=cssW+'px'; clone.style.height=cssH+'px';
-  const tb=clone.querySelector('.text-block');
-  if(tb){ tb.classList.remove('selected'); tb.style.borderColor='transparent'; tb.style.background='transparent'; }
+  clone.style.margin='0';
+  clone.style.pointerEvents='none';
+  clone.style.visibility='hidden';
+  clone.style.zIndex='-9999';
 
-  const serializer=new XMLSerializer();
-  const html=serializer.serializeToString(clone);
-  const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="${cssW*scale}" height="${cssH*scale}" viewBox="0 0 ${cssW} ${cssH}"><foreignObject x="0" y="0" width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml"><style>*{box-sizing:border-box}.sticker{background:#fff;overflow:hidden;font-family:Arial,sans-serif}.text-block{position:absolute;padding:2px;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;line-height:1.08;overflow:hidden;color:#111}</style>${html}</div></foreignObject></svg>`;
-  const blob=new Blob([svg],{type:'image/svg+xml;charset=utf-8'});
-  const url=URL.createObjectURL(blob);
+  const tb=clone.querySelector('.text-block');
+  if(!tb) throw new Error('Text block not found');
+  tb.classList.remove('selected');
+  tb.removeAttribute('contenteditable');
+  tb.style.border='0';
+  tb.style.background='transparent';
+  tb.style.cursor='default';
+
+  document.body.appendChild(clone);
   try{
-    const img=new Image();
-    await new Promise((resolve,reject)=>{img.onload=resolve;img.onerror=reject;img.src=url;});
+    await nextFrame();
+    const stickerRect=clone.getBoundingClientRect();
+    if(!stickerRect.width || !stickerRect.height) throw new Error('Sticker has zero size');
+
     const canvas=document.createElement('canvas');
-    canvas.width=Math.round(cssW*scale); canvas.height=Math.round(cssH*scale);
-    const ctx=canvas.getContext('2d');
-    ctx.fillStyle='#fff'; ctx.fillRect(0,0,canvas.width,canvas.height);
-    ctx.drawImage(img,0,0,canvas.width,canvas.height);
+    canvas.width=Math.max(1,Math.round(stickerRect.width*scale));
+    canvas.height=Math.max(1,Math.round(stickerRect.height*scale));
+    const ctx=canvas.getContext('2d',{alpha:false});
+    if(!ctx) throw new Error('Canvas is unavailable');
+
+    ctx.scale(scale,scale);
+    ctx.fillStyle='#fff';
+    ctx.fillRect(0,0,stickerRect.width,stickerRect.height);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0,0,stickerRect.width,stickerRect.height);
+    ctx.clip();
+
+    const walker=document.createTreeWalker(tb,NodeFilter.SHOW_TEXT);
+    const range=document.createRange();
+    let node;
+    while((node=walker.nextNode())){
+      const text=node.nodeValue || '';
+      if(!text) continue;
+      const parent=node.parentElement || tb;
+      const cs=getComputedStyle(parent);
+      const fontPx=parseFloat(cs.fontSize)||12;
+      ctx.font=canvasFontFromStyle(cs);
+      ctx.fillStyle=cs.color || '#111';
+      ctx.textBaseline='alphabetic';
+
+      for(let i=0;i<text.length;){
+        const cp=text.codePointAt(i);
+        const ch=String.fromCodePoint(cp);
+        const units=ch.length;
+        if(ch==='\n' || ch==='\r'){i+=units;continue;}
+
+        range.setStart(node,i);
+        range.setEnd(node,i+units);
+        const rects=range.getClientRects();
+        if(rects.length){
+          const r=rects[0];
+          // Spaces need no ink; their layout is already reflected in following x positions.
+          if(!/^\s+$/.test(ch)){
+            const m=ctx.measureText(ch);
+            const asc=Number.isFinite(m.actualBoundingBoxAscent)&&m.actualBoundingBoxAscent>0?m.actualBoundingBoxAscent:fontPx*0.78;
+            const desc=Number.isFinite(m.actualBoundingBoxDescent)?m.actualBoundingBoxDescent:fontPx*0.22;
+            const glyphH=Math.max(1,asc+desc);
+            const x=r.left-stickerRect.left;
+            const yTop=r.top-stickerRect.top;
+            const baseline=yTop+Math.max(0,(r.height-glyphH)/2)+asc;
+            ctx.fillText(ch,x,baseline);
+          }
+        }
+        i+=units;
+      }
+    }
+
+    ctx.restore();
     return canvas;
-  }finally{URL.revokeObjectURL(url);}
+  }finally{
+    clone.remove();
+  }
+}
+
+function canvasToJpegBytes(canvas,quality=0.96){
+  return new Promise((resolve,reject)=>{
+    canvas.toBlob(async blob=>{
+      try{
+        if(!blob) throw new Error('JPEG creation failed');
+        resolve(new Uint8Array(await blob.arrayBuffer()));
+      }catch(e){reject(e);}
+    },'image/jpeg',quality);
+  });
 }
 
 async function downloadExactPdf(){
   const btn=document.getElementById('downloadPdf');
   const old=btn.textContent;
-  btn.disabled=true; btn.textContent='Готую PDF…';
+  btn.disabled=true;
+  btn.textContent='Готую PDF…';
   try{
     block.classList.remove('selected');
+    // Make sure the visible preview contains the latest editor state before capture.
+    block.innerHTML=editorText.innerHTML;
+    if(autoFit.checked) fitText();
+    await nextFrame();
+
     const [w,h]=getPhysicalSize();
-    const canvas=await stickerToCanvas(4);
-    const jpegBytes=dataUrlToBytes(canvas.toDataURL('image/jpeg',0.98));
+    let canvas;
+    try{
+      canvas=await stickerToCanvas(4);
+    }catch(firstError){
+      console.warn('4x render failed, retrying at 2x',firstError);
+      canvas=await stickerToCanvas(2);
+    }
+
+    const jpegBytes=await canvasToJpegBytes(canvas,0.97);
     const pdf=makePdfFromJpeg(jpegBytes,canvas.width,canvas.height,w,h);
-    const blobPdf=new Blob([pdf],{type:'application/pdf'});
-    const url=URL.createObjectURL(blobPdf);
+    const pdfBlob=new Blob([pdf],{type:'application/pdf'});
+    const url=URL.createObjectURL(pdfBlob);
     const a=document.createElement('a');
     a.href=url;
     a.download=`sticker-${w}x${h}mm.pdf`;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(()=>URL.revokeObjectURL(url),1500);
+    a.style.display='none';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),5000);
   }catch(e){
-    console.error(e);
-    alert('Не вдалося створити PDF. Спробуйте ще раз.');
-  }finally{btn.disabled=false;btn.textContent=old;}
+    console.error('PDF export error:',e);
+    alert('PDF не створився. Натисніть «Друк» як резервний варіант і виберіть «Зберегти як PDF».');
+  }finally{
+    btn.disabled=false;
+    btn.textContent=old;
+  }
 }
 
 document.getElementById('downloadPdf').onclick=downloadExactPdf;
