@@ -461,9 +461,9 @@ function canvasFontFromStyle(cs){
 }
 
 async function stickerToCanvas(scale=4){
-  // Render through the browser's own text layout, then paint the already-laid-out
-  // glyphs to canvas. This avoids SVG/foreignObject security restrictions that
-  // can break direct PDF export on GitHub Pages.
+  // Lossless browser-style rendering: detect the DOM line layout, but draw
+  // whole text runs instead of individual letters. This keeps Arial glyphs,
+  // kerning and bold text looking normal in the exported PDF.
   const clone=sticker.cloneNode(true);
   clone.removeAttribute('id');
   clone.style.position='fixed';
@@ -505,10 +505,20 @@ async function stickerToCanvas(scale=4){
     ctx.beginPath();
     ctx.rect(0,0,stickerRect.width,stickerRect.height);
     ctx.clip();
+    if('fontKerning' in ctx) ctx.fontKerning='normal';
+    if('textRendering' in ctx) ctx.textRendering='optimizeLegibility';
 
-    const walker=document.createTreeWalker(tb,NodeFilter.SHOW_TEXT);
     const range=document.createRange();
+    const walker=document.createTreeWalker(tb,NodeFilter.SHOW_TEXT);
     let node;
+
+    const charRect=(textNode,index,units)=>{
+      range.setStart(textNode,index);
+      range.setEnd(textNode,index+units);
+      const rects=range.getClientRects();
+      return rects.length?rects[0]:null;
+    };
+
     while((node=walker.nextNode())){
       const text=node.nodeValue || '';
       if(!text) continue;
@@ -519,30 +529,59 @@ async function stickerToCanvas(scale=4){
       ctx.fillStyle=cs.color || '#111';
       ctx.textBaseline='alphabetic';
 
-      for(let i=0;i<text.length;){
+      let i=0;
+      while(i<text.length){
         const cp=text.codePointAt(i);
-        const ch=String.fromCodePoint(cp);
-        const units=ch.length;
-        if(ch==='\n' || ch==='\r'){i+=units;continue;}
-
-        range.setStart(node,i);
-        range.setEnd(node,i+units);
-        const rects=range.getClientRects();
-        if(rects.length){
-          const r=rects[0];
-          // Spaces need no ink; their layout is already reflected in following x positions.
-          if(!/^\s+$/.test(ch)){
-            const m=ctx.measureText(ch);
-            const asc=Number.isFinite(m.actualBoundingBoxAscent)&&m.actualBoundingBoxAscent>0?m.actualBoundingBoxAscent:fontPx*0.78;
-            const desc=Number.isFinite(m.actualBoundingBoxDescent)?m.actualBoundingBoxDescent:fontPx*0.22;
-            const glyphH=Math.max(1,asc+desc);
-            const x=r.left-stickerRect.left;
-            const yTop=r.top-stickerRect.top;
-            const baseline=yTop+Math.max(0,(r.height-glyphH)/2)+asc;
-            ctx.fillText(ch,x,baseline);
-          }
+        const firstChar=String.fromCodePoint(cp);
+        const firstUnits=firstChar.length;
+        if(firstChar==='\n' || firstChar==='\r'){
+          i+=firstUnits;
+          continue;
         }
-        i+=units;
+
+        const firstRect=charRect(node,i,firstUnits);
+        if(!firstRect){
+          i+=firstUnits;
+          continue;
+        }
+
+        const lineTop=firstRect.top;
+        const lineBottom=firstRect.bottom;
+        const runStart=i;
+        let runEnd=i+firstUnits;
+        let j=runEnd;
+
+        // Keep adding characters while the browser says they are on the same
+        // visual line. We later paint that whole run in one fillText() call.
+        while(j<text.length){
+          const cp2=text.codePointAt(j);
+          const ch2=String.fromCodePoint(cp2);
+          const units2=ch2.length;
+          if(ch2==='\n' || ch2==='\r') break;
+          const r2=charRect(node,j,units2);
+          if(!r2) break;
+          const sameLine=Math.abs(r2.top-lineTop)<0.75 && Math.abs(r2.bottom-lineBottom)<0.75;
+          if(!sameLine) break;
+          runEnd=j+units2;
+          j=runEnd;
+        }
+
+        const run=text.slice(runStart,runEnd);
+        range.setStart(node,runStart);
+        range.setEnd(node,runEnd);
+        const runRects=range.getClientRects();
+        if(runRects.length){
+          const rr=runRects[0];
+          const m=ctx.measureText(run || 'M');
+          const asc=Number.isFinite(m.actualBoundingBoxAscent)&&m.actualBoundingBoxAscent>0?m.actualBoundingBoxAscent:fontPx*0.78;
+          const desc=Number.isFinite(m.actualBoundingBoxDescent)?m.actualBoundingBoxDescent:fontPx*0.22;
+          const glyphH=Math.max(1,asc+desc);
+          const x=rr.left-stickerRect.left;
+          const yTop=rr.top-stickerRect.top;
+          const baseline=yTop+Math.max(0,(rr.height-glyphH)/2)+asc;
+          ctx.fillText(run,x,baseline);
+        }
+        i=runEnd;
       }
     }
 
@@ -553,7 +592,61 @@ async function stickerToCanvas(scale=4){
   }
 }
 
-function canvasToJpegBytes(canvas,quality=0.96){
+async function canvasToFlateRgb(canvas){
+  if(typeof CompressionStream==='undefined') throw new Error('CompressionStream unavailable');
+  const ctx=canvas.getContext('2d',{alpha:false});
+  const img=ctx.getImageData(0,0,canvas.width,canvas.height).data;
+  const rgb=new Uint8Array(canvas.width*canvas.height*3);
+  for(let s=0,d=0;s<img.length;s+=4){
+    rgb[d++]=img[s];
+    rgb[d++]=img[s+1];
+    rgb[d++]=img[s+2];
+  }
+  const compressedStream=new Blob([rgb]).stream().pipeThrough(new CompressionStream('deflate'));
+  return new Uint8Array(await new Response(compressedStream).arrayBuffer());
+}
+
+function makePdfFromFlateRgb(compressedBytes,pixelW,pixelH,pageWmm,pageHmm){
+  const enc=new TextEncoder();
+  const W=mmToPt(pageWmm).toFixed(4);
+  const H=mmToPt(pageHmm).toFixed(4);
+  const content=`q\n${W} 0 0 ${H} 0 0 cm\n/Im0 Do\nQ\n`;
+
+  const parts=[];
+  const offsets=[0];
+  let total=0;
+  const push=(part)=>{
+    const bytes=typeof part==='string'?enc.encode(part):part;
+    parts.push(bytes); total+=bytes.length;
+  };
+  push('%PDF-1.4\n%STICKER\n');
+
+  const addObj=(num,bodyParts)=>{
+    offsets[num]=total;
+    push(`${num} 0 obj\n`);
+    for(const x of bodyParts) push(x);
+    push('\nendobj\n');
+  };
+
+  addObj(1,['<< /Type /Catalog /Pages 2 0 R >>']);
+  addObj(2,['<< /Type /Pages /Kids [3 0 R] /Count 1 >>']);
+  addObj(3,[`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] /Resources << /ProcSet [/PDF /ImageC] /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>`]);
+  addObj(4,[`<< /Length ${enc.encode(content).length} >>\nstream\n`,content,'endstream']);
+  addObj(5,[`<< /Type /XObject /Subtype /Image /Width ${pixelW} /Height ${pixelH} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length ${compressedBytes.length} >>\nstream\n`,compressedBytes,'\nendstream']);
+
+  const xrefOffset=total;
+  let xref='xref\n0 6\n0000000000 65535 f \n';
+  for(let i=1;i<=5;i++) xref+=String(offsets[i]).padStart(10,'0')+' 00000 n \n';
+  push(xref);
+  push(`trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`);
+
+  const out=new Uint8Array(total);
+  let pos=0;
+  for(const part of parts){out.set(part,pos);pos+=part.length;}
+  return out;
+}
+
+function canvasToJpegBytes(canvas,quality=0.99){
   return new Promise((resolve,reject)=>{
     canvas.toBlob(async blob=>{
       try{
@@ -571,22 +664,31 @@ async function downloadExactPdf(){
   btn.textContent='Готую PDF…';
   try{
     block.classList.remove('selected');
-    // Make sure the visible preview contains the latest editor state before capture.
     block.innerHTML=editorText.innerHTML;
     if(autoFit.checked) fitText();
     await nextFrame();
 
     const [w,h]=getPhysicalSize();
+    // 6x gives a very clean result even when the PDF is zoomed in strongly.
     let canvas;
     try{
-      canvas=await stickerToCanvas(4);
+      canvas=await stickerToCanvas(6);
     }catch(firstError){
-      console.warn('4x render failed, retrying at 2x',firstError);
-      canvas=await stickerToCanvas(2);
+      console.warn('6x render failed, retrying at 4x',firstError);
+      canvas=await stickerToCanvas(4);
     }
 
-    const jpegBytes=await canvasToJpegBytes(canvas,0.97);
-    const pdf=makePdfFromJpeg(jpegBytes,canvas.width,canvas.height,w,h);
+    let pdf;
+    try{
+      // Lossless RGB image: no JPEG ringing around small letters.
+      const flate=await canvasToFlateRgb(canvas);
+      pdf=makePdfFromFlateRgb(flate,canvas.width,canvas.height,w,h);
+    }catch(losslessError){
+      console.warn('Lossless PDF path failed, using high-quality JPEG fallback',losslessError);
+      const jpegBytes=await canvasToJpegBytes(canvas,0.995);
+      pdf=makePdfFromJpeg(jpegBytes,canvas.width,canvas.height,w,h);
+    }
+
     const pdfBlob=new Blob([pdf],{type:'application/pdf'});
     const url=URL.createObjectURL(pdfBlob);
     const a=document.createElement('a');
