@@ -14,6 +14,7 @@ h1{margin:0 0 8px}
 p{color:#667085}
 textarea,select,input,button{font:inherit}
 textarea{width:100%;min-height:150px;padding:12px;border:1px solid #ccd2dc;border-radius:10px;resize:vertical}
+#editorText{min-height:230px;max-height:520px;resize:vertical;line-height:1.35}
 .row{display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-top:14px}
 .field{flex:1;min-width:220px}
 label{display:block;font-weight:700;font-size:14px;margin-bottom:7px}
@@ -24,22 +25,25 @@ button{height:42px;border:1px solid #ccd2dc;border-radius:9px;background:#fff;pa
 .panel{display:flex;flex-direction:column;gap:14px}
 .box{border:1px solid #d9dee7;border-radius:12px;padding:13px}
 .actions{display:flex;gap:8px;flex-wrap:wrap}
-.preview{min-height:500px;border:1px dashed #bfc6d2;border-radius:14px;background:#e9edf3;display:flex;align-items:center;justify-content:center;padding:28px;overflow:auto}
-.sticker{position:relative;width:60mm;height:50mm;background:#fff;border:1px solid #111;overflow:hidden;box-shadow:0 10px 28px rgba(0,0,0,.14)}
+.preview{min-height:500px;border:1px dashed #bfc6d2;border-radius:14px;background:#e9edf3;padding:28px;overflow:auto}
+.preview-stage{min-width:100%;min-height:440px;display:flex;align-items:center;justify-content:center}
+.sticker-wrap{position:relative;flex:0 0 auto}
+.sticker{position:absolute;left:0;top:0;width:60mm;height:50mm;background:#fff;border:1px solid #111;overflow:hidden;box-shadow:0 10px 28px rgba(0,0,0,.14);transform-origin:top left}
 .text-block{position:absolute;left:6px;top:6px;padding:2px;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;line-height:1.08;text-align:center;overflow:hidden;border:1px dashed transparent;cursor:move;user-select:none;touch-action:none}
 .text-block.selected{border-color:#2563eb;background:rgba(37,99,235,.04)}
 .text-block[contenteditable=true]{cursor:text;user-select:text}
 .tip{font-size:12.5px;color:#667085;line-height:1.45}
 .toolbar{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
-@media(max-width:800px){.editor{grid-template-columns:1fr}.preview{min-height:340px}}
+@media(max-width:800px){.editor{grid-template-columns:1fr}.preview{min-height:340px}.preview-stage{min-height:320px}}
 @media print{
   @page{margin:0}
   body{background:#fff}
   .panel,h1,p{display:none!important}
   .app,.card{padding:0;margin:0;border:0;box-shadow:none;max-width:none}
   .editor{display:block}
-  .preview{padding:0;border:0;background:#fff;min-height:0;display:block}
-  .sticker{border:0;box-shadow:none}
+  .preview{padding:0;border:0;background:#fff;min-height:0;display:block;overflow:visible}
+  .preview-stage,.sticker-wrap{min-height:0!important;width:auto!important;height:auto!important;display:block}
+  .sticker{position:relative;left:auto;top:auto;transform:none!important;border:0;box-shadow:none}
   .text-block.selected{border-color:transparent;background:transparent}
 }
 </style>
@@ -88,11 +92,33 @@ button{height:42px;border:1px solid #ccd2dc;border-radius:9px;background:#fff;pa
         <div class="box">
           <label>Розмір шрифту</label>
           <div class="row" style="margin-top:0">
-            <input id="fontSize" type="number" min="6" max="72" value="18" style="flex:1">
+            <input id="fontSize" type="number" min="1" max="120" value="18" style="flex:1">
             <button id="minus">−</button>
             <button id="plus">+</button>
           </div>
-          <div class="tip">Ручна зміна вимикає автопідбір.</div>
+          <div class="tip">Мінімум — 1. Ручна зміна вимикає автопідбір.</div>
+        </div>
+
+        <div class="box">
+          <label>Масштаб вікна</label>
+          <div class="row" style="margin-top:0">
+            <select id="zoom" style="flex:1">
+              <option value="1">100%</option>
+              <option value="1.5">150%</option>
+              <option value="2" selected>200%</option>
+              <option value="2.5">250%</option>
+              <option value="3">300%</option>
+            </select>
+            <button id="zoomMinus">−</button>
+            <button id="zoomPlus">+</button>
+          </div>
+          <div class="tip">Збільшує лише вигляд для зручного редагування. Реальний розмір стікера при друці не змінюється.</div>
+        </div>
+
+        <div class="box">
+          <label>Текст стікера</label>
+          <textarea id="editorText" placeholder="Редагуйте текст тут"></textarea>
+          <div class="tip">Поле можна розтягувати за нижній правий кут. Зміни одразу видно на стікері.</div>
         </div>
 
         <div class="box">
@@ -120,8 +146,12 @@ button{height:42px;border:1px solid #ccd2dc;border-radius:9px;background:#fff;pa
 
       <div>
         <div class="preview">
-          <div id="sticker" class="sticker">
-            <div id="textBlock" class="text-block"></div>
+          <div class="preview-stage">
+            <div id="stickerWrap" class="sticker-wrap">
+              <div id="sticker" class="sticker">
+                <div id="textBlock" class="text-block"></div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -140,13 +170,25 @@ const sticker = document.getElementById("sticker");
 const block = document.getElementById("textBlock");
 const autoFit = document.getElementById("autoFit");
 const fontSize = document.getElementById("fontSize");
+const editorText = document.getElementById("editorText");
+const zoom = document.getElementById("zoom");
+const stickerWrap = document.getElementById("stickerWrap");
 
 function setStickerSize(v){
   const [w,h]=sizes[v];
   sticker.style.width=w+"mm";
   sticker.style.height=h+"mm";
   sizeEdit.value=v;
-  setTimeout(fitText,0);
+  setTimeout(()=>{ fitText(); applyZoom(); },0);
+}
+
+function applyZoom(){
+  const z=parseFloat(zoom.value)||1;
+  const w=sticker.offsetWidth;
+  const h=sticker.offsetHeight;
+  sticker.style.transform=`scale(${z})`;
+  stickerWrap.style.width=(w*z)+"px";
+  stickerWrap.style.height=(h*z)+"px";
 }
 
 function fitText(){
@@ -160,10 +202,10 @@ function fitText(){
   block.style.maxWidth=block.style.width;
   block.style.maxHeight=block.style.height;
 
-  let size=72;
+  let size=120;
   block.style.fontSize=size+"px";
 
-  while(size>6 && (block.scrollHeight>block.clientHeight || block.scrollWidth>block.clientWidth)){
+  while(size>1 && (block.scrollHeight>block.clientHeight || block.scrollWidth>block.clientWidth)){
     size--;
     block.style.fontSize=size+"px";
   }
@@ -174,6 +216,7 @@ function generate(){
   const text=source.value.trim();
   if(!text){alert("Введіть текст.");return}
   block.innerText=source.value;
+  editorText.value=source.value;
   setStickerSize(sizeStart.value);
   start.classList.add("hidden");
   edit.classList.remove("hidden");
@@ -183,7 +226,8 @@ function generate(){
 document.getElementById("generate").onclick=generate;
 sizeEdit.onchange=e=>setStickerSize(e.target.value);
 
-block.addEventListener("input",fitText);
+block.addEventListener("input",()=>{ editorText.value=block.innerText; fitText(); });
+editorText.addEventListener("input",()=>{ block.innerText=editorText.value; fitText(); });
 block.addEventListener("dblclick",()=>{
   block.contentEditable="true";
   block.focus();
@@ -202,13 +246,27 @@ autoFit.onchange=()=>{if(autoFit.checked) fitText()};
 function manualSize(delta=0){
   autoFit.checked=false;
   let v=parseInt(fontSize.value)||18;
-  v=Math.max(6,Math.min(72,v+delta));
+  v=Math.max(1,Math.min(120,v+delta));
   fontSize.value=v;
   block.style.fontSize=v+"px";
 }
 fontSize.onchange=()=>manualSize(0);
 document.getElementById("minus").onclick=()=>manualSize(-1);
 document.getElementById("plus").onclick=()=>manualSize(1);
+
+
+zoom.onchange=applyZoom;
+function stepZoom(delta){
+  const values=[1,1.5,2,2.5,3];
+  let i=values.indexOf(parseFloat(zoom.value));
+  if(i<0)i=0;
+  i=Math.max(0,Math.min(values.length-1,i+delta));
+  zoom.value=String(values[i]);
+  applyZoom();
+}
+document.getElementById("zoomMinus").onclick=()=>stepZoom(-1);
+document.getElementById("zoomPlus").onclick=()=>stepZoom(1);
+window.addEventListener("resize",applyZoom);
 
 document.getElementById("bold").onclick=()=>{
   block.style.fontWeight = getComputedStyle(block).fontWeight >= 600 ? "400":"700";
@@ -224,9 +282,19 @@ document.getElementById("print").onclick=()=>{
 
 document.getElementById("back").onclick=()=>{
   source.value=block.innerText;
+  editorText.value=block.innerText;
   edit.classList.add("hidden");
   start.classList.remove("hidden");
 };
+
+let savedZoom=null;
+window.addEventListener("beforeprint",()=>{
+  savedZoom=zoom.value;
+  sticker.style.transform="none";
+  stickerWrap.style.width=sticker.offsetWidth+"px";
+  stickerWrap.style.height=sticker.offsetHeight+"px";
+});
+window.addEventListener("afterprint",()=>{ if(savedZoom!==null){ zoom.value=savedZoom; applyZoom(); } });
 </script>
 </body>
 </html>
