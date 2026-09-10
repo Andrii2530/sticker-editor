@@ -14,7 +14,9 @@ h1{margin:0 0 8px}
 p{color:#667085}
 textarea,select,input,button{font:inherit}
 textarea{width:100%;min-height:150px;padding:12px;border:1px solid #ccd2dc;border-radius:10px;resize:vertical}
-#editorText{min-height:230px;max-height:520px;resize:vertical;line-height:1.35}
+#editorText{width:100%;min-height:230px;max-height:520px;padding:12px;border:1px solid #ccd2dc;border-radius:10px;line-height:1.35;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;outline:none}
+#editorText:focus{border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.12)}
+#editorText:empty:before{content:attr(data-placeholder);color:#98a2b3;pointer-events:none}
 .row{display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-top:14px}
 .field{flex:1;min-width:220px}
 label{display:block;font-weight:700;font-size:14px;margin-bottom:7px}
@@ -117,8 +119,8 @@ button{height:42px;border:1px solid #ccd2dc;border-radius:9px;background:#fff;pa
 
         <div class="box">
           <label>Текст стікера</label>
-          <textarea id="editorText" placeholder="Редагуйте текст тут"></textarea>
-          <div class="tip">Поле можна розтягувати за нижній правий кут. Зміни одразу видно на стікері.</div>
+          <div id="editorText" contenteditable="true" data-placeholder="Редагуйте текст тут"></div>
+          <div class="tip">Виділіть мишкою потрібні слова і натисніть <b>B</b> — жирним стане тільки виділена частина. Зміни одразу видно на стікері.</div>
         </div>
 
         <div class="box">
@@ -171,6 +173,7 @@ const block = document.getElementById("textBlock");
 const autoFit = document.getElementById("autoFit");
 const fontSize = document.getElementById("fontSize");
 const editorText = document.getElementById("editorText");
+let lastRichEditor = editorText;
 const zoom = document.getElementById("zoom");
 const stickerWrap = document.getElementById("stickerWrap");
 
@@ -216,7 +219,7 @@ function generate(){
   const text=source.value.trim();
   if(!text){alert("Введіть текст.");return}
   block.innerText=source.value;
-  editorText.value=source.value;
+  editorText.innerText=source.value;
   setStickerSize(sizeStart.value);
   start.classList.add("hidden");
   edit.classList.remove("hidden");
@@ -226,8 +229,23 @@ function generate(){
 document.getElementById("generate").onclick=generate;
 sizeEdit.onchange=e=>setStickerSize(e.target.value);
 
-block.addEventListener("input",()=>{ editorText.value=block.innerText; fitText(); });
-editorText.addEventListener("input",()=>{ block.innerText=editorText.value; fitText(); });
+function syncFromBlock(){
+  editorText.innerHTML=block.innerHTML;
+  fitText();
+}
+function syncFromEditor(){
+  block.innerHTML=editorText.innerHTML;
+  fitText();
+}
+
+block.addEventListener("input",syncFromBlock);
+editorText.addEventListener("input",syncFromEditor);
+
+[editorText,block].forEach(el=>{
+  el.addEventListener("focus",()=>lastRichEditor=el);
+  el.addEventListener("mouseup",()=>lastRichEditor=el);
+  el.addEventListener("keyup",()=>lastRichEditor=el);
+});
 block.addEventListener("dblclick",()=>{
   block.contentEditable="true";
   block.focus();
@@ -268,8 +286,17 @@ document.getElementById("zoomMinus").onclick=()=>stepZoom(-1);
 document.getElementById("zoomPlus").onclick=()=>stepZoom(1);
 window.addEventListener("resize",applyZoom);
 
-document.getElementById("bold").onclick=()=>{
-  block.style.fontWeight = getComputedStyle(block).fontWeight >= 600 ? "400":"700";
+const boldBtn=document.getElementById("bold");
+boldBtn.addEventListener("mousedown",e=>e.preventDefault());
+boldBtn.onclick=()=>{
+  const host=lastRichEditor || editorText;
+  host.focus();
+  document.execCommand("bold",false,null);
+  if(host===editorText){
+    block.innerHTML=editorText.innerHTML;
+  }else{
+    editorText.innerHTML=block.innerHTML;
+  }
   fitText();
 };
 document.getElementById("left").onclick=()=>block.style.textAlign="left";
@@ -282,7 +309,7 @@ document.getElementById("print").onclick=()=>{
 
 document.getElementById("back").onclick=()=>{
   source.value=block.innerText;
-  editorText.value=block.innerText;
+  editorText.innerHTML=block.innerHTML;
   edit.classList.add("hidden");
   start.classList.remove("hidden");
 };
