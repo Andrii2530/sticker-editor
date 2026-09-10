@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sticker Editor AutoFit</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:Arial,sans-serif;background:#f3f5f8;color:#111}
+.app{max-width:1100px;margin:0 auto;padding:24px}
+.card{background:#fff;border:1px solid #d9dee7;border-radius:16px;padding:20px;box-shadow:0 8px 25px rgba(0,0,0,.06)}
+.hidden{display:none}
+h1{margin:0 0 8px}
+p{color:#667085}
+textarea,select,input,button{font:inherit}
+textarea{width:100%;min-height:150px;padding:12px;border:1px solid #ccd2dc;border-radius:10px;resize:vertical}
+#editorText{min-height:230px;max-height:520px;resize:vertical;line-height:1.35}
+.row{display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-top:14px}
+.field{flex:1;min-width:220px}
+label{display:block;font-weight:700;font-size:14px;margin-bottom:7px}
+select,input[type=number]{width:100%;height:42px;border:1px solid #ccd2dc;border-radius:9px;padding:0 10px}
+button{height:42px;border:1px solid #ccd2dc;border-radius:9px;background:#fff;padding:0 14px;font-weight:700;cursor:pointer}
+.primary{background:#111827;color:#fff;border-color:#111827}
+.editor{display:grid;grid-template-columns:320px 1fr;gap:18px}
+.panel{display:flex;flex-direction:column;gap:14px}
+.box{border:1px solid #d9dee7;border-radius:12px;padding:13px}
+.actions{display:flex;gap:8px;flex-wrap:wrap}
+.preview{min-height:500px;border:1px dashed #bfc6d2;border-radius:14px;background:#e9edf3;padding:28px;overflow:auto}
+.preview-stage{min-width:100%;min-height:440px;display:flex;align-items:center;justify-content:center}
+.sticker-wrap{position:relative;flex:0 0 auto}
+.sticker{position:absolute;left:0;top:0;width:60mm;height:50mm;background:#fff;border:1px solid #111;overflow:hidden;box-shadow:0 10px 28px rgba(0,0,0,.14);transform-origin:top left}
+.text-block{position:absolute;left:6px;top:6px;padding:2px;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;line-height:1.08;text-align:center;overflow:hidden;border:1px dashed transparent;cursor:move;user-select:none;touch-action:none}
+.text-block.selected{border-color:#2563eb;background:rgba(37,99,235,.04)}
+.text-block[contenteditable=true]{cursor:text;user-select:text}
+.tip{font-size:12.5px;color:#667085;line-height:1.45}
+.toolbar{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+@media(max-width:800px){.editor{grid-template-columns:1fr}.preview{min-height:340px}.preview-stage{min-height:320px}}
+@media print{
+  @page{margin:0}
+  body{background:#fff}
+  .panel,h1,p{display:none!important}
+  .app,.card{padding:0;margin:0;border:0;box-shadow:none;max-width:none}
+  .editor{display:block}
+  .preview{padding:0;border:0;background:#fff;min-height:0;display:block;overflow:visible}
+  .preview-stage,.sticker-wrap{min-height:0!important;width:auto!important;height:auto!important;display:block}
+  .sticker{position:relative;left:auto;top:auto;transform:none!important;border:0;box-shadow:none}
+  .text-block.selected{border-color:transparent;background:transparent}
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>Створення та редагування стікерів</h1>
+  <p>Текст автоматично підганяється під фізичний розмір стікера.</p>
+
+  <section id="start" class="card">
+    <label>Текст стікера</label>
+    <textarea id="source" placeholder="Вставте навіть великий текст — редактор сам підбере шрифт"></textarea>
+    <div class="row">
+      <div class="field">
+        <label>Розмір стікера</label>
+        <select id="sizeStart">
+          <option value="60x50">60 × 50 мм</option>
+          <option value="60x40">60 × 40 мм</option>
+          <option value="50x50">50 × 50 мм</option>
+        </select>
+      </div>
+      <button id="generate" class="primary">Згенерувати</button>
+    </div>
+  </section>
+
+  <section id="edit" class="card hidden">
+    <div class="editor">
+      <div class="panel">
+        <div class="box">
+          <label>Розмір стікера</label>
+          <select id="sizeEdit">
+            <option value="60x50">60 × 50 мм</option>
+            <option value="60x40">60 × 40 мм</option>
+            <option value="50x50">50 × 50 мм</option>
+          </select>
+        </div>
+
+        <div class="box">
+          <label style="display:flex;gap:8px;align-items:center">
+            <input id="autoFit" type="checkbox" checked style="width:auto">
+            Автопідбір шрифту
+          </label>
+          <div class="tip">Увімкнено за замовчуванням. Шрифт автоматично збільшується або зменшується так, щоб увесь текст залишався в межах стікера.</div>
+        </div>
+
+        <div class="box">
+          <label>Розмір шрифту</label>
+          <div class="row" style="margin-top:0">
+            <input id="fontSize" type="number" min="1" max="120" value="18" style="flex:1">
+            <button id="minus">−</button>
+            <button id="plus">+</button>
+          </div>
+          <div class="tip">Мінімум — 1. Ручна зміна вимикає автопідбір.</div>
+        </div>
+
+        <div class="box">
+          <label>Масштаб вікна</label>
+          <div class="row" style="margin-top:0">
+            <select id="zoom" style="flex:1">
+              <option value="1">100%</option>
+              <option value="1.5">150%</option>
+              <option value="2" selected>200%</option>
+              <option value="2.5">250%</option>
+              <option value="3">300%</option>
+            </select>
+            <button id="zoomMinus">−</button>
+            <button id="zoomPlus">+</button>
+          </div>
+          <div class="tip">Збільшує лише вигляд для зручного редагування. Реальний розмір стікера при друці не змінюється.</div>
+        </div>
+
+        <div class="box">
+          <label>Текст стікера</label>
+          <textarea id="editorText" placeholder="Редагуйте текст тут"></textarea>
+          <div class="tip">Поле можна розтягувати за нижній правий кут. Зміни одразу видно на стікері.</div>
+        </div>
+
+        <div class="box">
+          <label>Стиль</label>
+          <div class="toolbar">
+            <button id="bold"><b>B</b></button>
+            <button id="left">←</button>
+            <button id="center">↔</button>
+          </div>
+        </div>
+
+        <div class="box">
+          <div class="actions">
+            <button id="editText">Редагувати текст</button>
+            <button id="print" class="primary">Друк / PDF</button>
+            <button id="back">← Назад</button>
+          </div>
+        </div>
+
+        <div class="tip">
+          Подвійний клік по тексту — редагування. Enter переносить рядок.
+          Після кожної зміни тексту або формату стікера розмір шрифту перераховується автоматично.
+        </div>
+      </div>
+
+      <div>
+        <div class="preview">
+          <div class="preview-stage">
+            <div id="stickerWrap" class="sticker-wrap">
+              <div id="sticker" class="sticker">
+                <div id="textBlock" class="text-block"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+const sizes = {"60x50":[60,50],"60x40":[60,40],"50x50":[50,50]};
+const start = document.getElementById("start");
+const edit = document.getElementById("edit");
+const source = document.getElementById("source");
+const sizeStart = document.getElementById("sizeStart");
+const sizeEdit = document.getElementById("sizeEdit");
+const sticker = document.getElementById("sticker");
+const block = document.getElementById("textBlock");
+const autoFit = document.getElementById("autoFit");
+const fontSize = document.getElementById("fontSize");
+const editorText = document.getElementById("editorText");
+const zoom = document.getElementById("zoom");
+const stickerWrap = document.getElementById("stickerWrap");
+
+function setStickerSize(v){
+  const [w,h]=sizes[v];
+  sticker.style.width=w+"mm";
+  sticker.style.height=h+"mm";
+  sizeEdit.value=v;
+  setTimeout(()=>{ fitText(); applyZoom(); },0);
+}
+
+function applyZoom(){
+  const z=parseFloat(zoom.value)||1;
+  const w=sticker.offsetWidth;
+  const h=sticker.offsetHeight;
+  sticker.style.transform=`scale(${z})`;
+  stickerWrap.style.width=(w*z)+"px";
+  stickerWrap.style.height=(h*z)+"px";
+}
+
+function fitText(){
+  if(!autoFit.checked) return;
+
+  const pad=6;
+  block.style.left=pad+"px";
+  block.style.top=pad+"px";
+  block.style.width=(sticker.clientWidth-pad*2)+"px";
+  block.style.height=(sticker.clientHeight-pad*2)+"px";
+  block.style.maxWidth=block.style.width;
+  block.style.maxHeight=block.style.height;
+
+  let size=120;
+  block.style.fontSize=size+"px";
+
+  while(size>1 && (block.scrollHeight>block.clientHeight || block.scrollWidth>block.clientWidth)){
+    size--;
+    block.style.fontSize=size+"px";
+  }
+  fontSize.value=size;
+}
+
+function generate(){
+  const text=source.value.trim();
+  if(!text){alert("Введіть текст.");return}
+  block.innerText=source.value;
+  editorText.value=source.value;
+  setStickerSize(sizeStart.value);
+  start.classList.add("hidden");
+  edit.classList.remove("hidden");
+  setTimeout(fitText,50);
+}
+
+document.getElementById("generate").onclick=generate;
+sizeEdit.onchange=e=>setStickerSize(e.target.value);
+
+block.addEventListener("input",()=>{ editorText.value=block.innerText; fitText(); });
+editorText.addEventListener("input",()=>{ block.innerText=editorText.value; fitText(); });
+block.addEventListener("dblclick",()=>{
+  block.contentEditable="true";
+  block.focus();
+});
+block.addEventListener("blur",()=>{
+  block.contentEditable="false";
+  fitText();
+});
+document.getElementById("editText").onclick=()=>{
+  block.contentEditable="true";
+  block.focus();
+};
+
+autoFit.onchange=()=>{if(autoFit.checked) fitText()};
+
+function manualSize(delta=0){
+  autoFit.checked=false;
+  let v=parseInt(fontSize.value)||18;
+  v=Math.max(1,Math.min(120,v+delta));
+  fontSize.value=v;
+  block.style.fontSize=v+"px";
+}
+fontSize.onchange=()=>manualSize(0);
+document.getElementById("minus").onclick=()=>manualSize(-1);
+document.getElementById("plus").onclick=()=>manualSize(1);
+
+
+zoom.onchange=applyZoom;
+function stepZoom(delta){
+  const values=[1,1.5,2,2.5,3];
+  let i=values.indexOf(parseFloat(zoom.value));
+  if(i<0)i=0;
+  i=Math.max(0,Math.min(values.length-1,i+delta));
+  zoom.value=String(values[i]);
+  applyZoom();
+}
+document.getElementById("zoomMinus").onclick=()=>stepZoom(-1);
+document.getElementById("zoomPlus").onclick=()=>stepZoom(1);
+window.addEventListener("resize",applyZoom);
+
+document.getElementById("bold").onclick=()=>{
+  block.style.fontWeight = getComputedStyle(block).fontWeight >= 600 ? "400":"700";
+  fitText();
+};
+document.getElementById("left").onclick=()=>block.style.textAlign="left";
+document.getElementById("center").onclick=()=>block.style.textAlign="center";
+
+document.getElementById("print").onclick=()=>{
+  block.contentEditable="false";
+  window.print();
+};
+
+document.getElementById("back").onclick=()=>{
+  source.value=block.innerText;
+  editorText.value=block.innerText;
+  edit.classList.add("hidden");
+  start.classList.remove("hidden");
+};
+
+let savedZoom=null;
+window.addEventListener("beforeprint",()=>{
+  savedZoom=zoom.value;
+  sticker.style.transform="none";
+  stickerWrap.style.width=sticker.offsetWidth+"px";
+  stickerWrap.style.height=sticker.offsetHeight+"px";
+});
+window.addEventListener("afterprint",()=>{ if(savedZoom!==null){ zoom.value=savedZoom; applyZoom(); } });
+</script>
+</body>
+</html>
